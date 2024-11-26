@@ -1,0 +1,10 @@
+streamlit
+aiohttp
+transformers
+nltk
+python-dotenv
+torch
+scikit-learn
+rank-bm25
+keybert
+matplotlib
