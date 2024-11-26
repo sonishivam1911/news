@@ -18,9 +18,10 @@ load_dotenv()
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 CURRENTSAPI_KEY = os.getenv("CURRENTSAPI_KEY")
 GUARDIANAPI_KEY = os.getenv("GUARDIANAPI_KEY")
+HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 
 # Initialize NLP pipelines and stopwords
-sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+sentiment_analyzer = pipeline("sentiment-analysis")
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")  # Improved summarization model
 keyword_extractor = KeyBERT()  # Keyword extraction model
 STOP_WORDS = set(stopwords.words("english"))
