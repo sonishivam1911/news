@@ -3,9 +3,11 @@ import asyncio
 import aiohttp
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from rank_bm25 import BM25Okapi  # BM25 library
 from transformers import pipeline
 from nltk.corpus import stopwords
 import string
+from keybert import KeyBERT  # For keyword extraction
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -19,6 +21,8 @@ GUARDIANAPI_KEY = os.getenv("GUARDIANAPI_KEY")
 
 # Initialize NLP pipelines and stopwords
 sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+summarizer = pipeline("summarization", model="facebook/bart-large-cnn")  # Improved summarization model
+keyword_extractor = KeyBERT()  # Keyword extraction model
 STOP_WORDS = set(stopwords.words("english"))
 
 # Preprocess text: tokenize, remove punctuation/stopwords
@@ -51,60 +55,63 @@ async def fetch_all_news(query):
     ]
     return await asyncio.gather(*tasks)
 
-# Compute relevance scores using TF-IDF + cosine similarity (async)
-async def compute_relevance_score(query, article):
-    content = article.get("description") or article.get("content") or ""
-    if not content:
-        return None
-
+# Compute relevance scores using BM25 (async)
+async def compute_bm25_scores(query, articles):
     preprocessed_query = preprocess_text(query)
-    preprocessed_content = preprocess_text(content)
-
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform([preprocessed_query, preprocessed_content])
-
-    score = cosine_similarity(tfidf_matrix[0], tfidf_matrix[1])[0][0]
-    return {
-        "source": article.get("source", {}).get("name", ""),
-        "url": article.get("url", ""),
-        "content": content,
-        "relevance_score": score,
-    }
-
-# Score all articles concurrently (async)
-async def score_articles_concurrently(query, articles):
-    tasks = [compute_relevance_score(query, article) for article in articles]
-    scored_articles = await asyncio.gather(*tasks)
+    tokenized_articles = [
+        preprocess_text(article.get("description", "") + " " + article.get("content", "")).split()
+        for article in articles if article.get("description") or article.get("content")
+    ]
     
-    # Filter out None results (articles without content)
-    scored_articles = [article for article in scored_articles if article is not None]
+    bm25 = BM25Okapi(tokenized_articles)
+    scores = bm25.get_scores(preprocessed_query.split())
 
-    # Sort articles by relevance score in descending order
+    scored_articles = []
+    for article, score in zip(articles, scores):
+        scored_articles.append({
+            "source": article.get("source", {}).get("name", ""),
+            "url": article.get("url", ""),
+            "content": article.get("description", "") + " " + article.get("content", ""),
+            "relevance_score": score,
+        })
+
     scored_articles.sort(key=lambda x: x["relevance_score"], reverse=True)
-    print(scored_articles)
-    
-    # Return top 20 articles with score >= 0.7 (to ensure enough data for both sentiments)
-    return [article for article in scored_articles if article["relevance_score"] >= 0.2][:20]
+    return scored_articles[:20]  # Return top 20 articles
 
-# Analyze sentiments of articles (batch processing) and ensure 10 positive and 10 negative articles
+# Analyze sentiments of articles (batch processing)
 def analyze_sentiments(articles):
     pro_articles, con_articles = [], []
-    
+
     contents_with_metadata = [
         {"content": a["content"], "source": a["source"], "url": a["url"]} for a in articles if a.get("content")
     ]
-    
+
     contents = [item["content"] for item in contents_with_metadata]
-    
+
     sentiments = sentiment_analyzer(contents, batch_size=8)
-    
+
     for item, sentiment in zip(contents_with_metadata, sentiments):
-        if sentiment["label"] == "POSITIVE" and len(pro_articles) < 10:
+        if sentiment["label"] == "POSITIVE":
             pro_articles.append(item)
-        elif sentiment["label"] == "NEGATIVE" and len(con_articles) < 10:
+        elif sentiment["label"] == "NEGATIVE":
             con_articles.append(item)
 
-    return pro_articles, con_articles
+    return pro_articles[:10], con_articles[:10]
+
+# Summarize all positive or negative articles into a single summary
+def summarize_group(articles):
+    combined_text = " ".join([article["content"] for article in articles])
+    
+    try:
+        summary = summarizer(combined_text, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
+        return summary
+    except Exception as e:
+        return f"Error summarizing group: {e}"
+
+# Extract keywords from an article's content
+def extract_keywords(content):
+    keywords = keyword_extractor.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=5)
+    return [kw[0] for kw in keywords]
 
 # Main processing function with async scoring and sentiment analysis
 def process_news(query):
@@ -124,17 +131,27 @@ def process_news(query):
     if isinstance(currents_data.get("news"), list):
         all_articles.extend(currents_data["news"])
 
-    # Score articles asynchronously using TF-IDF and cosine similarity
-    scored_articles = loop.run_until_complete(score_articles_concurrently(query, all_articles))
-    
-    # Perform sentiment analysis on top relevant articles and ensure 10 positive/negative articles
-    pro_articles, con_articles = analyze_sentiments(scored_articles)
+    # Score articles asynchronously using BM25
+    scored_articles_bm25 = loop.run_until_complete(compute_bm25_scores(query, all_articles))
+
+    # Perform sentiment analysis on top relevant articles
+    pro_articles, con_articles = analyze_sentiments(scored_articles_bm25)
+
+    # Generate overall summaries for positive/negative articles
+    positive_summary = summarize_group(pro_articles)
+    negative_summary = summarize_group(con_articles)
+
+    # Extract keywords for each article
+    for article in pro_articles + con_articles:
+        article["keywords"] = extract_keywords(article["content"])
 
     return {
+        "positive_summary": positive_summary,
+        "negative_summary": negative_summary,
         "pro_articles": pro_articles,
         "con_articles": con_articles,
         "positive_count": len(pro_articles),
         "negative_count": len(con_articles),
-        "total_count": len(scored_articles),
-        "relevant_articles": scored_articles,
+        "total_count": len(scored_articles_bm25),
+        "relevant_articles": scored_articles_bm25,
     }
