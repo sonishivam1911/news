@@ -8,6 +8,7 @@ from transformers import pipeline
 from nltk.corpus import stopwords
 import string
 from keybert import KeyBERT  # For keyword extraction
+import nltk
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -20,9 +21,14 @@ CURRENTSAPI_KEY = os.getenv("CURRENTSAPI_KEY")
 GUARDIANAPI_KEY = os.getenv("GUARDIANAPI_KEY")
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 
+try:
+    nltk.data.find("corpora/stopwords")
+except LookupError:
+    nltk.download("stopwords")
+
 # Initialize NLP pipelines and stopwords
 sentiment_analyzer = pipeline("sentiment-analysis")
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn")  # Improved summarization model
+summarizer = pipeline("summarization", model="t5-base")  # Improved summarization model
 keyword_extractor = KeyBERT()  # Keyword extraction model
 STOP_WORDS = set(stopwords.words("english"))
 
