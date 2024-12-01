@@ -7,7 +7,7 @@ st.set_page_config(page_title="News AI App", page_icon="📰", layout="wide")
 
 # App title and description
 st.title("📰 News AI App")
-st.write("Analyze news articles, classify them as Pro or Con, and view overall summaries!")
+st.write("Analyze news articles, classify them as Pro or Con, and view overall summaries! (Please note refresh the app if no article comes up : it is free app)")
 
 # Input field for the query
 query = st.text_input("🔍 Enter a topic to search for news:")
